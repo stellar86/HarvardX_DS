@@ -1,0 +1,1318 @@
+---
+title: "Movielens Recommendation System"
+author: "Estelle Rossouw (https://github.com/stellar86/HarvardX_DS)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+abstract: |
+  This is a movie recommendation system report for the Harvard-X Data Science Capstone Project.
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{multirow}
+  - \usepackage{wrapfig}
+  - \usepackage{float}
+  - \usepackage{colortbl}
+  - \usepackage{pdflscape}
+  - \usepackage{tabu}
+  - \usepackage{threeparttable}
+  - \usepackage[normalem]{ulem}
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: kable
+    highlight: pygments
+    keep_tex: true
+  html_document: default
+---
+
+```{r setup, include=TRUE, echo=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, cache=FALSE, warning = FALSE,message = FALSE, fig.align = 'center',tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+
+```{r, echo=FALSE}
+################################################################################################################################
+# WARNING - THIS SCRIPT REQUIRES INTERNET ACCESS AND WILL TAKE ABOUT 45 MINS TO EXECUTE
+################################################################################################################################
+
+################################################################################################################################
+# Install Required Libraries
+################################################################################################################################
+if(!require(readr)) install.packages("readr")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(tidyr)) install.packages("tidyr")
+if(!require(stringr)) install.packages("stringr")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(gridExtra)) install.packages("gridExtra")
+if(!require(dslabs)) install.packages("dslabs")
+if(!require(data.table)) install.packages("data.table")
+if(!require(ggrepel)) install.packages("ggrepel")
+if(!require(ggthemes)) install.packages("ggthemes")
+if(!require(Metrics)) install.packages("Metrics")
+if(!require(lubridate)) install.packages("lubridate")
+if(!require(recosystem)) install.packages("recosystem")
+if(!require(caret)) install.packages("caret")
+if(!require(forcats)) install.packages("forcats")
+if(!require(kableExtra)) install.packages("kableExtra")
+if(!require(formatR)) install.packages("formatR")
+#webshot::install_phantomjs()
+################################################################################################################################
+# Load Required Libraries
+################################################################################################################################
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(dslabs)
+library(data.table)
+library(ggrepel)
+library(ggthemes)
+library(Metrics)
+library(lubridate)
+library(recommenderlab)
+library(recosystem)
+library(caret)
+library(forcats)
+library(plotly)
+library(knitr)
+library(kableExtra)
+library(formatR)
+
+################################################################################################################################
+# Create edx set, validation set
+################################################################################################################################
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>%
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+#Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+#remove some items no longer required to reduce memory footprint
+rm(dl,ratings, movies, test_index, temp, movielens, removed)
+```
+\newpage
+# Executive Summary
+
+The first automated recommender system was originally developed in 1993 by the University of Minnesota for Usenet article recommendations (Grouplens). MovieLens was also developed to study recommendation engines, tagging systems, and user interfaces. The Grouplens system predicted how much other users will like an article (before reading it), based on ratings from other users. Using collabaritive filtering, this was one of the first algorithms to automatically make predictions on historical rating patterns.(https://en.wikipedia.org/wiki/GroupLens_Research)
+
+This report describes a movie recommendation algorithm design using the 10M version of the MovieLens dataset. The 10M Movielens dataset supplied consists of approximately 10 million movie ratings (this is however a small subset of the original MovieLens dataset). The movielens dataset supplied in this report was split into a training and test set (with a 90%/10% split respectively). The training and test sets were named "edx" and "validation". 
+
+By using the "edx" and "validation" datasets, the goal of the recommender algorithm is to predict movie ratings (from the "validation" set) by training a machine learning algorithm using the inputs from the "edx" dataset. The benchmark Root Mean Squared Error (RMSE) for the algorithm was defined as <= 0.8649.
+
+The "edx" and "validation" datasets can be summarized as follows:
+
+**edx dataset**
+\newline Nr of Movies: 10677
+\newline Nr of Users: 69878
+\newline Nr of Genres: 19
+
+**validation dataset**
+\newline Nr of Movies: 9809
+\newline Nr of Users: 68534
+\newline Nr of Genres: 19 
+
+The RMSE formula used in this report:
+$$\mbox{RMSE} = \sqrt{\frac{1}{n}\sum_{t=1}^{n}e_t^2}$$
+To achieve the benchmark RMSE, various algorithms was tested on a smaller test and training set. The algorithm yielding the best RMSE was then implemented using the validation set. Through hours of training and testing the lowest RMSE achieved was 0.783 on the validation set, using the Matrix factorization with Stochastic Gradient Descent algorithm.
+
+
+This report consist of the following sections:
+\newline Section 2: Initial Dataset Exploration
+\newline Section 3: Feature Engineering/Data Cleansing
+\newline Section 4: Data Analysis
+\newline Section 5: Methods/Analysis
+\newline Section 6: Results
+\newline Section 7: Conclusion
+\newline Section 8: References
+\newline Section 9: Environmental Variables
+
+\newpage
+
+# Initial Dataset Exploration
+
+Initial Data Exploration of the edx and validation datasets are discussed in the sections below.
+
+## Check Dataset Composition
+
+**First 5 rows of edx Dataset**
+```{r, echo=FALSE}
+head(edx,5) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped"),
+                position = "center",
+                font_size = 10,
+                full_width = FALSE) %>% footnote(general = "edx Dataset Columns Overview", footnote_as_chunk = T)
+```
+
+**Dataset Features/Variables/Columns**
+```{r, echo=FALSE}
+col_overview <- data.frame(ColName = c("userId","movieId","rating","timestamp","title","genres"), Datatype = c("integer","numeric", "numeric","integer","character","character"), Description = c("Unique ID for the user","Unique ID for the movie","A rating between 0 and 5 for the movie"," Date and time the rating was given","Movie title (not unique)","Pipe-Seperated Genres associated with the movie"))
+
+col_overview %>% kable() %>%
+  kable_styling(bootstrap_options = c("striped"),
+                position = "center",
+                font_size = 10,
+                full_width = FALSE) %>%   
+                footnote(general = "edx Column and Datatype Overview", footnote_as_chunk = T)
+```
+## Summarize Dataset Columns
+**edx dataset**
+```{r, echo=FALSE}
+  edx_summary <- data.frame(Rows =nrow(edx), Cols = ncol(edx), Movies = n_distinct(edx$movieId), Users = n_distinct(edx$userId), Genres = n_distinct(edx$genre))
+
+  kable(edx_summary) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F , position ="center") %>%
+  footnote(general = "edx Dataset Overview",
+  footnote_as_chunk = T)
+```
+**validation dataset**
+```{r, echo=FALSE}
+  val_summary <- data.frame(Rows =nrow(validation), Cols = ncol(validation), Movies = n_distinct(validation$movieId), Users = n_distinct(validation$userId), Genres =        n_distinct(validation$genre))
+
+  kable(val_summary) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F , position ="center") %>%
+  footnote(general = "validation Dataset Overview",
+           footnote_as_chunk = T)
+```
+\newpage
+## Check Dataset For NA's
+**edx dataset**
+```{r, echo=FALSE}
+  edx_checkna <- sapply(edx, function(x) sum(is.na(x))) 
+  
+  kable(edx_checkna) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F , position ="center") %>%
+  footnote(general = "Check NA's edx Dataset",
+           footnote_as_chunk = T)
+```
+**validation dataset**
+```{r, echo=FALSE}
+val_checkna <- sapply(validation, function(x) sum(is.na(x))) 
+  
+kable(val_checkna) %>%
+    kable_styling(bootstrap_options = "striped", full_width = F , position ="center") %>%
+    footnote(general = "Check NA's validation Dataset",
+    footnote_as_chunk = T)
+```
+This indicates that no records needs to be removed (for the accuracy and operation of the algorithm)
+\newpage
+
+# Feature Engineering/Data Cleansing
+
+The aim of feature engineering or data cleansing is to modify (add/delete/update) existing columns in the edx and validation datasets to provide the required functionality for the machine learning algorithm
+
+## Timestamps
+As identified in the exploratory data analysis section, the timestamp column in the edx/validation datasets are integers representing a UNIX timestamp. By converting this timestamp to a human-readable timestamp and assigning it to a new column (date), more analysis can be done on the date column.
+```{r, echo=FALSE}
+glimpse(edx)
+```
+```{r, echo=TRUE}
+#Convert UNIX Timestamp to Human Readbale Date
+edx <- mutate(edx, date = as_datetime(timestamp))
+validation <- mutate(validation, date = as_datetime(timestamp))
+
+```
+The resultant summary for both datasets are as follows: 
+```{r, echo=FALSE}
+glimpse(edx)
+```
+
+```{r, echo=FALSE}
+glimpse(validation)
+```
+
+\newpage
+## Extracting Year and Month of Rating
+From the new converted timestamp column (date), the year and month of rating can be extracted for data analysis and algorithm feature addition.
+```{r, echo=TRUE}
+# Extract the year and month of rate in both dataset
+
+edx$yearOfRate <- format(edx$date,"%Y")
+edx$monthOfRate <- format(edx$date,"%m")
+
+validation$yearOfRate <- format(validation$date,"%Y")
+validation$monthOfRate <- format(validation$date,"%m")
+
+```
+```{r, echo=FALSE}
+glimpse(edx)
+```
+## Extracting the Year of Release for Each Movie
+The release year for each movie is currently contained in the the title of the movie. By splitting the year from the movie title, further data analysis can be performed.
+```{r, echo=TRUE}
+# Extract the year and month of rate in both dataset
+
+# edx dataset
+edx <- edx %>%
+mutate(title = str_trim(title)) %>%
+extract(title,c("titleTemp", "release"),regex = "^(.*) \\(([0-9 \\-]*)\\)$",remove = F) %>%
+mutate(release = if_else(str_length(release) > 4, 
+as.integer(str_split(release, "-",simplify = T)[1]),as.integer(release))
+  ) %>% mutate(title = if_else(is.na(titleTemp),title,titleTemp)) %>% select(-titleTemp)
+
+# validation dataset
+validation <- validation %>%
+  mutate(title = str_trim(title)) %>%
+  extract(title,c("titleTemp", "release"),regex = "^(.*) \\(([0-9 \\-]*)\\)$",remove = F) %>%
+  mutate(release = if_else(str_length(release) > 4, 
+  as.integer(str_split(release, "-",simplify = T)[1]),as.integer(release))
+  ) %>% mutate(title = if_else(is.na(titleTemp),title,titleTemp)) %>% select(-titleTemp)
+
+```
+```{r, echo=FALSE}
+glimpse(edx)
+```
+
+
+## Genres
+As identified in the exploratory data analysis section, the genres listed per movie is pipe-seperated. This means that a movie can be classified under a combination of genres. Genres will be split up for data analysis portions only.
+
+## Datatype Conversion
+To ensure the datatypes of the columns to be used in the machine learning algorithm matches the requirements, the following conversions where done.
+```{r, echo=TRUE}
+# Convert the columns into the desidered data type
+
+edx$yearOfRate <- as.numeric(edx$yearOfRate)
+edx$monthOfRate <- as.numeric(edx$monthOfRate)
+edx$release <- as.numeric(edx$release)
+validation$yearOfRate <- as.numeric(validation$yearOfRate)
+validation$monthOfRate <- as.numeric(validation$monthOfRate)
+validation$release <- as.numeric(validation$release)
+```
+## Variable Cleanup
+To optimize memory and storage space on the computer of datasets, unused columns were removed.
+```{r, echo=TRUE}
+# Remove unnecessary columns on edx and validation dataset
+
+edx <- edx %>% select(userId, movieId, rating, title, genres, release, yearOfRate, monthOfRate)
+validation <- validation %>% select(userId, movieId, rating, title, genres
+                                    , release, yearOfRate, monthOfRate)
+```
+## Pre-processing Results
+The resultant dataset after pre-processing as as follows:
+```{r, echo=TRUE}
+#Pre-processing results
+glimpse(edx)
+glimpse(validation)
+```
+\newpage
+# Data Analysis
+The aim of the data analysis was to obtain a better picture on the type of data available in the dataset. Some useful insights were gained on the rating patterns, movie popularity, genre popularity and general statistical distributions.
+
+## Distributions
+**User Rating Distribution**
+\newline 
+From the graph below, most of the ratings done by users are 3 and above.
+```{r,echo=FALSE}
+#Get Rating Distribution for Users
+edx %>% group_by(rating) %>% summarize(n = n())  %>% ggplot(aes(rating,n)) +  geom_col() +
+  ylab("Nr of Ratings") + xlab("Rating Level") + 
+  theme_economist_white() +
+  ggtitle("Frequency Distribution of User Ratings")
+
+# Ratings Distribution
+ratings_distribution <- edx %>%
+  group_by(rating) %>% 
+  summarise(ratings_distribution_sum = n()) %>%
+  arrange(desc(ratings_distribution_sum))
+
+kable(ratings_distribution) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F , position ="center") %>%
+  footnote(general = "Nr of Ratings per Rating Category",
+           footnote_as_chunk = T)
+```
+\newpage
+**Movie Rating Frequency Distribution**
+\newline 
+The movie rating distribution is shown below:
+```{r,echo=FALSE}
+#Distribution of Movie Ratings
+edx %>% group_by(movieId) %>% summarize(n = n()) %>%
+  ggplot(aes(n)) + geom_histogram(fill = "grey40", color = "white", bins = 10) +
+  scale_x_log10() +  theme_economist_white() +
+  ggtitle("Distribution of Movie Rating Frequency")
+```
+\newpage
+
+## Movie Ratings
+**Movies Rated Per Year**
+\newline 
+From the graph below, most movies where rated in 2000.
+```{r,echo=FALSE}
+#Ratings of Movies per Year
+edx %>% group_by(yearOfRate)  %>% summarize(n = n())   %>% ggplot(aes(yearOfRate,n)) +  geom_col() +
+  ylab("Nr of Ratings") + xlab("Year") + 
+  theme_economist_white() +
+  ggtitle("Ratings of Movies per Year")
+```
+\newpage
+**Movies Rated Per Month**
+\newline 
+From the graph below, most movies where rated in November.
+```{r,echo=FALSE}
+#Get Ratings of Movies per Month
+edx %>% group_by(monthOfRate)  %>% summarize(n = n())   %>% ggplot(aes(monthOfRate,n)) +  geom_col() +
+  ylab("Nr of Ratings") + xlab("Month") + 
+  theme_economist_white() +
+  ggtitle("Ratings of Movies per Month")
+```
+\newpage
+**Top 20 Rated Movies**
+\newline 
+From the graph below, Forrest Gump was rated the most.
+```{r,echo=FALSE}
+edx %>%
+  group_by(title) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(n=20) %>%
+  ggplot(aes(title, count)) +
+  theme_economist_white() +
+  geom_col() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7)) +
+  labs(title = "Ratings Per Title - TOP 20 Movies",
+      x = "Movie",
+       y = "Frequency")
+```
+\newpage
+**Year of Rating vs Rating Relationshop**
+\newline
+The graph below indicates the average rating per year based on the year of the rating.
+```{r,echo=FALSE}
+#Relationship between year of release and movie rating
+year_avgs <- edx%>% group_by(yearOfRate) %>% summarize(avg_rating_by_year = mean(rating)) #year the movie was rated
+
+year_avgs %>%
+  ggplot(aes(yearOfRate, avg_rating_by_year)) +
+  geom_point() + theme_economist_white() + geom_smooth() +
+  ggtitle("Year of Movie Rating vs Average Movie Rating")
+
+```
+\newpage
+## Genres
+**Rating Summary per Genre**
+\newline 
+The section below summarizes the ratings, users and movies per genre. As seen in the graph below, the Drama genre was rated the most times.
+
+Graph:
+```{r, echo=FALSE}
+#Calculate Additional Movie Rating Metrics
+edx_movies_metrics <- edx %>%
+  separate_rows(genres,
+                sep = "\\|") %>%
+  group_by(genres) %>%
+  summarize(Ratings_Total = n(),
+            Ratings_Mean = mean(rating),
+            Movies_Total = n_distinct(movieId),
+            Users_Total = n_distinct(userId));
+
+#Display the genres with the most rated movies (not distinct movies)
+edx_movies_metrics$Ratings_Mean <- round(edx_movies_metrics$Ratings_Mean, digits = 2)
+
+#Ratings Distribution per Genre
+edx_movies_metrics %>%
+  group_by(genres) %>%
+  summarise(Ratings_Total) %>%
+  ggplot(aes(genres, Ratings_Total)) +
+  geom_col() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7)) 
+  labs(title = "Ratings Distribution Per Genre",
+       x = "Genre",
+       y = "Ratings_Total") + theme_economist_white()
+```
+\newpage
+Rating's Summary:
+```{r, echo=FALSE}
+#Display Summary Table
+kable(edx_movies_metrics) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F , position ="center") %>%
+  footnote(general = "Genre rating summary",
+           footnote_as_chunk = T)
+```
+\newpage
+**Mean rating per Genre**
+\newline
+The graph below indicates that the Film-Noir Genre was rated the highest mean score.
+```{r,echo=FALSE}
+#Genres Mean rating
+temp <- edx_movies_metrics %>%
+  group_by(genres) %>%
+  summarize(Ratings_Mean) %>%
+  arrange(- Ratings_Mean)
+
+temp %>%
+  ggplot(aes(reorder(genres,  Ratings_Mean),  Ratings_Mean, fill=  Ratings_Mean)) +
+  geom_bar(stat = "identity") + coord_flip() +
+  scale_fill_distiller(palette = "Spectral") + labs(y = "Mean Rating", x = "Genre") + theme_economist_white() +
+  ggtitle("Average Rating of Genres")
+
+```
+\newpage
+# Methodology
+This section describes the machine learning methodology followed.
+
+## RMSE Calcution
+As per the project requirements, the benchmark RMSE for this project is  0.8649. The following function was created to calculate the RMSE:
+```{r, echo=TRUE}
+#RMSE Function for Analysis
+
+RMSE <- function(true_ratings = NULL, predicted_ratings = NULL) {
+    sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+## Plot Function for Predicted vs Real Ratings
+A plot function was created to minimize code for handling "real vs predicted rating" plots of different models being tested:
+```{r, echo=TRUE}
+#Plot function for predicted vs real ratings
+Pred_Plot <- function(true_ratings = NULL, predicted_ratings = NULL, titlex = NULL)
+{
+  pred_ratings <- round(predicted_ratings/0.5) *0.5
+  MF_first50_pred <- data.frame(true_ratings[1:50],predicted_ratings[1:50],correct_predicted = 0);
+  names(MF_first50_pred) <- c("real_ratings","predicted_ratings");
+  MF_first50_pred$correct_predicted <- ifelse(MF_first50_pred$real_ratings == MF_first50_pred$predicted_ratings, 1, 0)
+
+  pmf <- ggplot(data=MF_first50_pred, aes(x=real_ratings, y = predicted_ratings,colour=correct_predicted)) + 
+    xlab("Real Ratings") + ylab("Predicted Ratings") +
+    ggtitle(paste(titlex, " (Real vs Pred Ratings [50])")) +
+    theme(plot.title = element_text(size = 12, color = "black", hjust = 0.5)) + 
+    geom_jitter()
+  
+  plot(pmf)
+}
+```
+## Training and Test Data Sets
+Due to the size of the supplied datasets, a smaller training and test data set was created from the edx dataset to evaluate the machine learning algorithms (using a 80%/20% split with 10M records):
+```{r, echo=TRUE}
+set.seed(1, sample.kind="Rounding")
+
+#Create smaller dataset for training and testing models
+edx2 <-  head(edx,1000000)
+test_index <- createDataPartition(y = edx2$rating, times = 1,
+                                  p = 0.2, list = FALSE)
+train_set <- edx2[-test_index,]
+test_set <- edx2[test_index,]
+
+# Make sure userId and movieId in test set are also in train set
+test_set <- test_set %>%
+  semi_join(train_set, by = "movieId") %>%
+  semi_join(train_set, by = "userId")
+
+rm(test_index)
+
+```
+The final machine learning algorithm will be tested against the validation set to determine the RMSE.
+
+\newpage
+## Machine Learning Algorithms
+To obtain the required RMSE, two of algorithms was tested, and will be described below:
+
+### Model 1: Netflix Inspired Algorithm
+This algorithm was inspired by the course material from the Harvard-X Datascience program and the Netflix challenge of 2011.
+
+The algorithm composition is as follows:
+
+**Naive Baseline Model**
+
+This model always predicts the mean of a dataset.
+```{r,echo=FALSE}
+# Calculate the average rating of all movies in train_set dataset
+
+mu_hat <- mean(train_set$rating)
+
+paste("The mean is:", as.character(mu_hat))
+
+```
+**Naive Mean-Baseline  Model**
+ 
+The formula used is:
+$$Y_{u,i} = \hat{\mu} + \varepsilon_{u,i}$$
+
+```{r,echo=FALSE}
+# Predict the basic RMSE on the test_set set
+
+naive_rmse <- RMSE(test_set$rating, mu_hat)
+
+predictions <- rep(4.5, nrow(test_set))
+
+#Plot Predictions
+
+Pred_Plot(test_set$rating, mu_hat,"Mean-Baseline Model")
+
+# Creating a results table for all RMSE results
+
+rmse_results <- data.frame(Dataset = "Train/Test", Model="Naive Mean-Baseline Model", RMSE=naive_rmse,Accuracy = mean(predictions==test_set$rating), Lambda ="NA" )
+
+```
+
+The RMSE for this model was 1.0583, which requires improvement as this does not meet the baseline RMSE requirement of  0.8649.
+\newpage
+**Movie-Effect Model**
+
+This model takes into account the fact that some movies are rated higher than others.
+
+The formula used is:
+$$Y_{u,i} = \hat{\mu} + b_i + \epsilon_{u,i}$$
+
+With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$.
+
+```{r,echo=FALSE}
+# Modelling the movie effect bias
+
+mu <- mean(train_set$rating) 
+
+#Determine b_i
+movie_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+# Compute the predicted ratings on test set
+
+pred_movie_model <- mu + test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_i
+
+movie_model_rmse <- RMSE(pred_movie_model, test_set$rating)
+
+#Plot Predictions
+
+Pred_Plot(round(pred_movie_model), test_set$rating,"Movie Effect Model")
+
+# Adding the results to the results dataset
+
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test", Model="Movie Effect Model",
+                                     RMSE = movie_model_rmse,
+                                     Accuracy = mean(round(pred_movie_model/0.5)*0.5==test_set$rating)
+                                      , Lambda ="NA")
+
+```
+The RMSE for this model was 0.9488, which requires improvement as this does not meet the baseline RMSE requirement of  0.8649.
+\newpage
+**Movie and User Effect Model**
+
+This model takes into account the fact that some movies are rated higher than others and that users have different movie preferences and thus rate accordingly.
+
+The formula used is:
+$$Y_{u,i} = \hat{\mu} + b_i + b_u + \epsilon_{u,i}$$
+
+With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$.
+
+
+```{r,echo=FALSE}
+# Modelling the movie and user effect bias
+
+user_avgs <- train_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+# Compute the predicted ratings on test dataset
+
+pred_user_movie_model <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+user_movie_model_rmse <- RMSE(pred_user_movie_model, test_set$rating)
+
+#Plot Predictions
+
+Pred_Plot(round(pred_user_movie_model), test_set$rating,"Movie+User Effect Model")
+
+# Adding the results to the results dataset
+
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Move+User Effect Model",
+                                     RMSE = user_movie_model_rmse,
+                                     Accuracy = mean(round(pred_user_movie_model/0.5)*0.5==test_set$rating) , Lambda ="NA")
+
+```
+The RMSE for this model was 0.8723, which requires improvement as this is not meeting the baseline RMSE requirement of  0.8649.
+\newpage
+**Movie and User and Year Effect Model** 
+
+This model takes into account the fact that some movies are rated higher than others and that users have different movie preferences and thus rate accordingly. This model also accounts for the year the movie was rated.
+
+The formula used is:
+$$Y_{u,i,r} = \hat{\mu} + b_i + b_u + b_r + \epsilon_{u,i,r}$$
+With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$. The  $b_r$ refers to the effect the year of rating has on the movie.
+
+```{r,echo=FALSE}
+# Modelling the movie and user + year released effect bias
+year_pop <- train_set %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(yearOfRate) %>%
+  summarize(b_u_r = mean(rating - mu_hat - b_i - b_u))
+
+# Compute the predicted ratings on test dataset
+
+pred_m_u_r_model <- test_set %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_pop, by='yearOfRate') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_r) %>%
+  pull(pred)
+
+m_u_r_model_rmse <- RMSE(pred_m_u_r_model, test_set$rating)
+
+#Plot Predictions
+
+Pred_Plot(round(pred_m_u_r_model), test_set$rating,"Mov/Usr/Year Effect Model")
+
+# Adding the results to the results dataset
+
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Mov/Usr/Year Effect Model",
+                                     RMSE = m_u_r_model_rmse,
+                                     Accuracy = mean(round(pred_m_u_r_model/0.5)*0.5==test_set$rating) , Lambda ="NA")
+
+```
+The RMSE for this model was 0.872, which requires improvement as this does not meet the baseline RMSE requirement of  0.8649.
+\newpage
+**Movie and User and Genre Effect Model**
+
+This model takes into account the fact that some movies are rated higher than others and that users have different movie preferences and thus rate accordingly. This model also accounts for it's combined genres.
+
+The formula used is:
+$$Y_{u,i,g} = \hat{\mu} + b_i + b_u + b_g + \epsilon_{u,i,g}$$
+
+With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$.  The  $b_g$ refers to the genre effect.
+
+
+```{r,echo=FALSE}
+# Modelling the movie and user and genre released effect bias
+genre_pop <- train_set %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarize(b_u_g = mean(rating - mu_hat - b_i - b_u ))
+
+
+# Compute the predicted ratings on test dataset
+
+pred_m_u_g_model <- test_set %>%
+  
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_pop, by='genres') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_g) %>%
+  pull(pred)
+
+
+m_u_g_model_rmse <- RMSE(pred_m_u_g_model, test_set$rating)
+
+#Plot Predictions
+
+Pred_Plot(floor(pred_m_u_g_model), test_set$rating,"Mov/Usr/Genr Effect Model")
+
+# Adding the results to the results dataset
+
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Mov/Usr/Genr Effect Model",
+                                     RMSE = m_u_g_model_rmse,
+                                     Accuracy = mean(round(pred_m_u_g_model/0.5)*0.5==test_set$rating) , Lambda ="NA")
+
+```
+The RMSE for this model was 0.872, which requires improvement as this does not meet the baseline RMSE requirement of  0.8649.
+\newpage
+**Movie and User and Year and Genre Effect Model**
+
+The model takes into account the fact that some movies are rated higher than others and that users have different movie preferences and thus rate accordingly. This model also accounts for the year the movie was rated and it's combined genres.
+
+The formula used is:
+$$Y_{u,i,r,g} = \hat{\mu} + b_i + b_u + b_r + b_g + \epsilon_{u,i,r,g}$$
+
+With $\hat{\mu}$ is the mean and $\varepsilon_{i,u}$ is the independent errors sampled from the same distribution centered at 0. The $b_i$ is a measure for the popularity of movie $i$, i.e. the bias of movie $i$. The  $b_u$ is a measure for the mildness of user $u$, i.e. the bias of user $u$. The  $b_r$ refers to the effect the year of rating has on the movie. he  $b_g$ refers to the genre effect.
+
+
+```{r,echo=FALSE}
+genre_pop <- train_set %>%
+ left_join(movie_avgs, by='movieId') %>%
+ left_join(user_avgs, by='userId') %>%
+ left_join(year_pop, by='yearOfRate') %>%
+ group_by(genres) %>%
+ summarize(b_u_g = mean(rating - mu_hat - b_i - b_u - b_u_r))
+
+
+# Compute the predicted ratings on test dataset
+
+pred_m_u_g_y_model <- test_set %>%
+  
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_pop, by='yearOfRate') %>%
+  left_join(genre_pop, by='genres') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_r + b_u_g) %>%
+  pull(pred)
+
+
+m_u_g_y_model_rmse <- RMSE(pred_m_u_g_y_model, test_set$rating)
+
+#Plot Predictions
+
+Pred_Plot(floor(pred_m_u_g_y_model), test_set$rating,"Mov/Usr/Gen/Yr Effect Model")
+
+# Adding the results to the results dataset
+
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Movie+User+Year+Genre Effect Model",
+                                     RMSE = m_u_g_y_model_rmse,
+                                     Accuracy = mean(round(pred_m_u_g_y_model/0.5)*0.5==test_set$rating) , Lambda ="NA")
+```
+The RMSE for this model was 0.872, which requires improvement as this does not meet the baseline RMSE requirement of  0.8649.
+\newpage
+**Movie and User and Year and Genre Effect Models with Regularization**
+
+The regularization method allows us to add a penalty $\lambda$ (lambda) to penalizes movies with large estimates from a small sample size. In order to optimize $b_i$, it necessary to use this basic equation:
+
+$$\frac{1}{N} \sum_{u,i} (y_{u,i} - \mu - b_{i})^{2} + \lambda \sum_{i} b_{i}^2$$   
+
+reduced to this equation:   
+
+$$\hat{b_{i}} (\lambda) = \frac{1}{\lambda + n_{i}} \sum_{u=1}^{n_{i}} (Y_{u,i} - \hat{\mu}) $$ 
+
+Regularization was applied to the four models above, the results are shown below:
+
+**Movie Effects - Lamba Tuning Parameter**
+```{r,echo=FALSE}
+##################################Movie Effects Regularization Model##################################
+# Regularization logic added to model grouped by movie id. 
+# Cross test_set is used to determine the minimum lambda to use for the model.
+
+lambda_mov <- seq(0, 15, 0.1)
+
+# Compute the predicted ratings on test_set dataset using different values of lambda
+
+just_the_sum <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(s = sum(rating - mu), n_i = n())
+
+rmses_movie <- sapply(lambda_mov, function(l){
+  mu <- mean(train_set$rating)
+  predicted_ratings <- test_set %>% 
+    left_join(just_the_sum, by='movieId') %>% 
+    mutate(b_i = s/(n_i+l)) %>%
+    mutate(pred = mu + b_i) %>%
+    .$pred
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+
+#Plot the lambda tuning parameter vs rmse
+qplot(lambda_mov, rmses_movie) + ggtitle("Lambda VS RMSE") + theme_economist_white()
+
+# Get the lambda value that minimize the RMSE
+min_lambda_movie <- lambda_mov[which.min(rmses_movie)]
+
+#min_lambda_movie = 3.6
+
+# Predict the RMSE on the test_set set
+regularized_movie_model_rmse <- min(rmses_movie)
+
+predicted_ratings <- test_set %>% 
+  left_join(just_the_sum, by='movieId') %>% 
+  mutate(b_i = s/(n_i+min_lambda_movie)) %>%
+  mutate(pred = mu + b_i) %>%
+  .$pred
+
+#Plot Predictions
+#Pred_Plot(round(predicted_ratings), test_set$rating,"Reg Movie Effect Model")
+
+# Adding the results to the results dataset
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Regularized Movie Effect Model", RMSE=regularized_movie_model_rmse,
+                                     Accuracy = mean(round(predicted_ratings/0.5)*0.5==test_set$rating) , Lambda = as.character(min_lambda_movie))
+```
+\newpage
+**Movie + User Effects - Lamba Tuning Parameter**
+```{r,echo=FALSE}
+##################################Movie + User Effects Regularization Model##################################
+# Regularization logic added to model grouped by movie id. 
+# Cross test_set is used to determine the minimum lambda to use for the model.
+
+lambda_movuser<- seq(0, 15, 0.1)
+
+rmses_user_movie <- sapply(lambda_movuser, function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <- 
+    test_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+
+#Plot the lambda tuning parameter vs rmse
+qplot(lambda_movuser, rmses_user_movie) + ggtitle("Lambda VS RMSE") + theme_economist_white()
+
+# Get the lambda value that minimize the RMSE
+min_lambda_movie_user <- lambda_movuser[which.min(rmses_user_movie)]
+
+#min_lambda_movie_user = 7
+
+# Predict the RMSE on the test_set set
+regularized_user_movie_model_rmse <- min(rmses_user_movie)
+
+#Calculate Predicted Ratings from Min Lambda
+mu <- mean(train_set$rating)
+b_i <- train_set %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+min_lambda_movie_user))
+b_u <- train_set %>% 
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu)/(n()+min_lambda_movie_user))
+predicted_ratings <- 
+  test_set %>% 
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+#Plot Predictions
+#Pred_Plot(round(predicted_ratings), test_set$rating,"Reg Movie+User Effect Model")
+
+# Adding the results to the results dataset
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Regularized Movie+User Effect Model", RMSE=regularized_user_movie_model_rmse,
+                                     Accuracy = mean(round(predicted_ratings/0.5)*0.5==test_set$rating), Lambda = as.character(min_lambda_movie_user))
+```
+\newpage
+**Movie + User + Year Effects - Lamba Tuning Parameter**
+```{r,echo=FALSE}
+##################################Movie + User + Year Effects Regularization Model##################################
+# Regularization logic added to model grouped by movie id and user id and year rated. 
+# Cross test_set is used to determine the minimum lambda to use for the model
+
+lambda_movuseryear <- seq(0, 15, 0.1)
+
+# Compute the predicted ratings on test_set dataset using different values of lambda
+
+rmses_user_movie_year <- sapply(lambda_movuseryear, function(l) {
+  mu <- mean(train_set$rating)
+  # Calculate the average by user
+  b_i <- train_set %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  # Calculate the average by user
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  b_u_r <- train_set %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(yearOfRate) %>%
+    summarize(b_u_r = sum(rating - b_i - mu_hat - b_u) / (n() + l))
+  
+  # Compute the predicted ratings on test_set dataset
+  predicted_ratings <- 
+    test_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_u_r, by='yearOfRate') %>%
+    mutate(pred = mu_hat + b_i + b_u + b_u_r) %>%
+    .$pred
+  
+  # Predict the RMSE on the test set
+  return(RMSE(predicted_ratings, test_set$rating))
+  
+  
+})
+
+#Plot the lambda tuning parameter vs rmse
+qplot(lambda_movuseryear, rmses_user_movie_year) + ggtitle("Lambda VS RMSE") + theme_economist_white()
+
+
+# Get the lambda value that minimize the RMSE
+
+min_lambda_movie_user_year <- lambda_movuseryear[which.min(rmses_user_movie_year)]
+
+#min_lambda_movie_user_genre = 4.9
+
+# Predict the RMSE on the test_set set
+
+regularized_user_movie_year_model_rmse <- min(rmses_user_movie_year)
+
+#Calculate Predicted Ratings from Min Lambda
+mu <- mean(train_set$rating)
+b_i <- train_set %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+min_lambda_movie_user_year))
+
+# Calculate the average by user
+b_u <- train_set %>% 
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu)/(n()+min_lambda_movie_user_year))
+
+b_u_r <- train_set %>%
+  left_join(b_i, by='movieId') %>%
+  left_join(b_u, by='userId') %>%
+  group_by(yearOfRate) %>%
+  summarize(b_u_r = sum(rating - b_i - mu_hat - b_u) / (n() + min_lambda_movie_user_year))
+
+# Compute the predicted ratings on test_set dataset
+predicted_ratings <- 
+  test_set %>% 
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_u_r, by='yearOfRate') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_r) %>%
+  .$pred
+
+#Plot Predictions
+#Pred_Plot(round(predicted_ratings), test_set$rating,"Reg Movie+User+Year Effect Model")
+
+# Adding the results to the results dataset
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Regularized Movie+User+Year Effect Model", RMSE=regularized_user_movie_year_model_rmse,
+                                     Accuracy = mean(round(predicted_ratings/0.5)*0.5==test_set$rating), Lambda = as.character(min_lambda_movie_user_year))
+```
+\newpage
+**Movie + User + Year + Genre Effects - Lamba Tuning Parameter**
+```{r,echo=FALSE}
+##################################Movie + User + Year + Genre Effects Regularization Model##################################
+# Regularization logic added to model grouped by movie id and user id and and year rated and genre. 
+# Cross test_set is used to determine the minimum lambda to use for the model
+
+lambda_movusergenre <- seq(0, 15, 0.1)
+
+# Compute the predicted ratings on test_set dataset using different values of lambda
+
+rmses_user_movie_genre <- sapply(lambda_movusergenre, function(l) {
+  mu <- mean(train_set$rating)
+  # Calculate the average by user
+  b_i <- train_set %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  # Calculate the average by user
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  b_u_r <- train_set %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(yearOfRate) %>%
+    summarize(b_u_r = sum(rating - b_i - mu_hat - b_u) / (n() + l))
+  
+  b_u_g <- train_set %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_r, by='yearOfRate') %>%
+    group_by(genres) %>%
+    summarize(b_u_g = sum(rating - b_i - mu_hat - b_u - b_u_r) / (n() + l))
+  
+  # Compute the predicted ratings on test_set dataset
+  predicted_ratings <- 
+    test_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_u_r, by='yearOfRate') %>%
+    left_join(b_u_g, by='genres') %>%
+    mutate(pred = mu_hat + b_i + b_u + b_u_r + b_u_g) %>%
+    .$pred
+  
+  # Predict the RMSE on the test set
+  return(RMSE(predicted_ratings, test_set$rating))
+  
+  
+})
+
+#Plot the lambda tuning parameter vs rmse
+qplot(lambda_movusergenre, rmses_user_movie_genre) + ggtitle("Lambda VS RMSE") + theme_economist_white()
+
+# Get the lambda value that minimize the RMSE
+
+min_lambda_movie_user_genre <- lambda_movusergenre[which.min(rmses_user_movie_genre)]
+
+#min_lambda_movie_user_genre = 4.9
+
+# Predict the RMSE on the test_set set
+
+regularized_user_movie_genre_model_rmse <- min(rmses_user_movie_genre)
+
+#Calculate Predicted Ratings from Min Lambda
+mu <- mean(train_set$rating)
+# Calculate the average by user
+b_i <- train_set %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+min_lambda_movie_user_genre))
+
+# Calculate the average by user
+b_u <- train_set %>% 
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu)/(n()+min_lambda_movie_user_genre))
+
+b_u_r <- train_set %>%
+  left_join(b_i, by='movieId') %>%
+  left_join(b_u, by='userId') %>%
+  group_by(yearOfRate) %>%
+  summarize(b_u_r = sum(rating - b_i - mu_hat - b_u) / (n() + min_lambda_movie_user_genre))
+
+b_u_g <- train_set %>%
+  left_join(b_i, by='movieId') %>%
+  left_join(b_u, by='userId') %>%
+  left_join(b_u_r, by='yearOfRate') %>%
+  group_by(genres) %>%
+  summarize(b_u_g = sum(rating - b_i - mu_hat - b_u - b_u_r) / (n() + min_lambda_movie_user_genre))
+
+# Compute the predicted ratings on test_set dataset
+predicted_ratings <- 
+  test_set %>% 
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_u_r, by='yearOfRate') %>%
+  left_join(b_u_g, by='genres') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_r + b_u_g) %>%
+  .$pred
+
+#Plot Predictions
+#Pred_Plot(round(predicted_ratings), test_set$rating,"Reg Movie+User+Year+Genre Effect Model")
+
+# Adding the results to the results dataset
+rmse_results <- rmse_results %>% add_row(Dataset = "Train/Test",Model="Regularized Movie+User+Year+Genre Effect Model", RMSE=regularized_user_movie_genre_model_rmse,
+                                     Accuracy = mean(round(predicted_ratings/0.5)*0.5==test_set$rating),Lambda = as.character(min_lambda_movie_user_genre))
+```
+From the regularization results, the model that took into account both movie+user+genre+year effects yielded to lowest RMSE results of 0.87 with a lambda value of 3.5. This model will be tested on the validation set for final results.
+
+\newpage
+**Testing optimized model on validation set**
+
+When testing the optimized model on the validation set, the RMSE is 0.8647 which exceeds the baseline RMSE requirement of 0.8649.
+```{r,echo=TRUE}
+min_lambda_val_set <- 3.5
+
+#Calculate Predicted Ratings from Min Lambda
+mu <- mean(edx$rating)
+# Calculate the average by user
+b_i <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+min_lambda_val_set))
+
+# Calculate the average by user
+b_u <- edx %>% 
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu)/(n()+min_lambda_val_set))
+
+b_u_r <- edx %>%
+  left_join(b_i, by='movieId') %>%
+  left_join(b_u, by='userId') %>%
+  group_by(yearOfRate) %>%
+  summarize(b_u_r = sum(rating - b_i - mu_hat - b_u) / (n() + min_lambda_val_set))
+
+b_u_g <- edx %>%
+  left_join(b_i, by='movieId') %>%
+  left_join(b_u, by='userId') %>%
+  left_join(b_u_r, by='yearOfRate') %>%
+  group_by(genres) %>%
+  summarize(b_u_g = sum(rating - b_i - mu_hat - b_u - b_u_r) / (n() + min_lambda_val_set))
+
+# Compute the predicted ratings on test_set dataset
+predicted_ratings <- 
+  validation %>% 
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_u_r, by='yearOfRate') %>%
+  left_join(b_u_g, by='genres') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_r + b_u_g) %>%
+  .$pred
+
+rmse_val_res <- RMSE(predicted_ratings, validation$rating)
+
+#Plot Predictions
+Pred_Plot(round(predicted_ratings), validation$rating,"Regularized Model 1")
+
+rmse_results <- rmse_results %>% add_row(Dataset = "edx/validation", Model="Regularized Movie+User+Year+Genre Effect Model", RMSE=rmse_val_res,
+                                     Accuracy = mean(round(predicted_ratings/0.5)*0.5==validation$rating), Lambda = as.character(min_lambda_val_set))
+rmse_results %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped"),
+                position = "center",
+                font_size = 10,
+                full_width = FALSE) %>%
+                footnote(general = "RMSE's for Model 1",
+                         footnote_as_chunk = T)
+```
+\newpage
+### Model 2 - Matrix Factorization with Parallel Stochastic Gradient Descent Model
+
+Matrix factorization was empirically shown to be a better model than traditional nearest-neighbor based approaches in the Netﬂix Prize competition and KDD Cup 2011. The goal is to approximate the incomplete matrix A by WHT, where W and H are rank-k matrices. Matrix factorization overs superior speed and accuracy when compared to model 1 in this report.
+
+This algorithm uses a recosystem library, which is an R wrapper of the LIBMF library developed by Yu-Chin Juan, Wei-Sheng Chin, Yong Zhuang, Bo-Wen Yuan, Meng-Yuan Yang, and Chih-Jen Lin (http://www.csie.ntu.edu.tw/~cjlin/libmf/), an open source library for recommender system using parallel marix factorization. (Chin, Yuan, et al. 2015)
+
+```{r,echo=TRUE}
+#Create algorithm datasets
+edx_fact <- edx %>% select(movieId,userId,rating) 
+validation_fact <- validation %>% select(movieId,userId,rating) 
+#Convert to Matrix
+edx_fact <- as.matrix(edx_fact)
+validation_fact <- as.matrix(validation_fact)
+
+#write to disk
+write.table(edx_fact , file = "trainingset.txt" , sep = " " , row.names = FALSE, col.names = FALSE)
+write.table(validation_fact, file = "validationset.txt" , sep = " " , row.names = FALSE, col.names = FALSE)
+
+#Initialize train and test sets
+set.seed(1, sample.kind="Rounding")
+training_dataset <- data_file( "trainingset.txt")
+validation_dataset <- data_file( "validationset.txt")
+
+#Create Reco Object
+r = Reco()
+
+#Create Tuning Parameters
+opts = r$tune(training_dataset, opts = list(dim = c(10, 20, 30), lrate = c(0.1, 0.2),
+                                            costp_l1 = 0, costq_l1 = 0,
+                                            nthread = 1, niter = 10))
+
+#Train Model
+r$train(training_dataset, opts = c(opts$min, nthread = 1, niter = 20))
+
+# write predictions to a tempfile on HDisk
+
+stored_prediction = tempfile()
+
+#Run Prediction
+r$predict(validation_dataset, out_file(stored_prediction))  
+real_ratings <- read.table("validationset.txt", header = FALSE, sep = " ")$V3
+pred_ratings <- scan(stored_prediction)
+
+#Determine RMSE
+rmse_of_model_mf <- RMSE(pred_ratings,real_ratings)
+rmse_results <- rmse_results %>% add_row(Dataset = "edx/validation", Model="Matrix Factorization with Parallel Stochastic Gradient Descent", RMSE=rmse_of_model_mf,
+                                         Accuracy = mean(round(pred_ratings/0.5)*0.5==validation$rating), Lambda = "NA")
+
+rmse_results %>% filter (RMSE <= 0.8) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped"),
+                position = "center",
+                font_size = 10,
+                full_width = FALSE) %>%
+  footnote(general = "RMSE for Model 2",
+           footnote_as_chunk = T)
+
+#Compare Predictions
+pred_ratings_rounded <-  pred_ratings
+pred_ratings_rounded <- round(pred_ratings_rounded/0.5) *0.5
+
+#Plot Predictions
+Pred_Plot(pred_ratings_rounded, real_ratings,"Matrix Fact with SGD")
+```
+When testing the SGD Model on the validation set, the RMSE is 0.783 which exceeds the baseline RMSE requirement of  0.8649.
+
+# Results
+
+From the two models tested, the Matrix factorization with stochastic gradient descent model performed better when comparing it to model 1 (which follows the Netflix approach of 2011) in terms of RMSE.
+
+**Final RMSE Results**
+```{r,echo=FALSE}
+rmse_results %>% filter (RMSE <= 0.8649) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped"),
+                position = "center",
+                font_size = 10,
+                full_width = FALSE) %>%
+  footnote(general = "Final Results",
+           footnote_as_chunk = T)
+```
+\newpage
+# Conclusion
+
+From hours of testing different models and configurations, it was clear from research that matrix factorization model offers superior performance when applied to recommender systems (as seen in the RMSE results). When implemented on the supplied validation dataset, an RMSE of 0.783 was obtained. 
+
+**Recommendations**
+
+-Split larger datasets into smaller training and tests sets for testing algorithms to avoid wasting time.
+-Spending time analyzing data before developing models/algorithms will help to achieve the goal faster.
+
+**Future Work**
+
+-Use the recommenderlab package to explore this project further. Baseline simulations was ran but it resulted in an RMSE of exceeding 0.9.
+-Use single-value decomposition and matrix facotorization to expand on model 1. 
+-Consider time effects on model 1. 
+-Modify tuning parameters for model 2 to optimize RMSE.
+
+\newpage
+# References
+https://github.com/AlessandroCorradini/Harvard-Data-Science-Professional/tree/master/09%20-%20PH125.9x%20-%20Capstone
+
+https://rpubs.com/jeknov/movieRec
+ 
+https://github.com/gideonvos/MovieLens/blob/master/MovieLensProject.R
+
+https://redroy44.github.io/2017/02/03/movielens/
+
+https://github.com/mmurray2073/harvardx_datascience/blob/master/Capstone_MovieLens_MichaelMurray.R
+
+https://cran.r-project.org/web/packages/recosystem/vignettes/introduction.html
+
+https://www.analyticsvidhya.com/blog/2016/12/practical-guide-to-implement-machine-learning-with-caret-package-in-r-with-practice-problem/
+ 
+http://rstudio-pubs-static.s3.amazonaws.com/493393_e53177fe25844f788d0bebafa8e7035f.html
+
+Chin, Wei-Sheng, Bo-Wen Yuan, Meng-Yuan Yang, Yong Zhuang, Yu-Chin Juan, and Chih-Jen Lin. 2015. “LIBMF: A Library for Parallel Matrix Factorization in Shared-Memory Systems.” https://www.csie.ntu.edu.tw/~cjlin/papers/libmf/libmf_open_source.pdf.
+
+Chin, Wei-Sheng, Yong Zhuang, Yu-Chin Juan, and Chih-Jen Lin. 2015a. “A Fast Parallel Stochastic Gradient Method for Matrix Factorization in Shared Memory Systems.” ACM TIST. 
+
+http://www.csie.ntu.edu.tw/~cjlin/papers/libmf/libmf_journal.pdf. 2015b. “A Learning-Rate Schedule for Stochastic Gradient Methods to Matrix Factorization.” PAKDD. 
+
+http://www.csie.ntu.edu.tw/~cjlin/papers/libmf/mf_adaptive_pakdd.pdf.
+ 
+https://researcher.watson.ibm.com/researcher/files/us-phaas/rj10482Updated.pdf
+
+https://bookdown.org/yihui/rmarkdown/
+
+\newpage
+# Environmental Variables
+
+```{r}
+#Print OS
+print("Operating System:")
+version
+
+#Print Installed Packages
+print("All installed packages")
+installed.packages()
+```
