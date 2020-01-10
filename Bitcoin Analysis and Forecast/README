@@ -1,0 +1,9 @@
+This project was done for the Hardvard-X Capstone Requirements
+
+Instructions:
+# INSTRUCTIONS - ENSURE THAT crypto-markets.csv ARE IN THE SAME DIRECTORY AS THE .R FILE AND .RMD FILE
+# FILE CAN BE DOWNLOADED WITH A REGISTERED ACCOUNT FROM: https://www.kaggle.com/jessevent/all-crypto-currencies
+# Ensure that you have internet access for installing libraries!
+# Installing libraries can take 30 minutes
+# Set working directory to local path on computer (line98 in .R and line129 in .RMD)
+# Install Tinytex if required: install_tinytex() -- accept DLL error missing (Can be done on line 33)
